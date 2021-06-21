@@ -64,6 +64,7 @@ class ConvTasNet(BaseEncoderMaskerDecoder):
         n_filters=512,
         stride=8,
         encoder_activation=None,
+        audio_chan=1,
         sample_rate=8000,
         **fb_kwargs,
     ):
@@ -94,6 +95,7 @@ class ConvTasNet(BaseEncoderMaskerDecoder):
         masker = TDConvNet(
             n_feats,
             n_src,
+            audio_chan=audio_chan,
             out_chan=out_chan,
             n_blocks=n_blocks,
             n_repeats=n_repeats,

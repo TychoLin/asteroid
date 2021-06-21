@@ -131,6 +131,7 @@ class TDConvNet(nn.Module):
         self,
         in_chan,
         n_src,
+        audio_chan=1,
         out_chan=None,
         n_blocks=8,
         n_repeats=3,
@@ -145,6 +146,7 @@ class TDConvNet(nn.Module):
         super(TDConvNet, self).__init__()
         self.in_chan = in_chan
         self.n_src = n_src
+        self.audio_chan = audio_chan
         out_chan = out_chan if out_chan else in_chan
         self.out_chan = out_chan
         self.n_blocks = n_blocks
@@ -157,8 +159,8 @@ class TDConvNet(nn.Module):
         self.mask_act = mask_act
         self.causal = causal
 
-        layer_norm = norms.get(norm_type)(in_chan)
-        bottleneck_conv = nn.Conv1d(in_chan, bn_chan, 1)
+        layer_norm = norms.get(norm_type)(audio_chan * in_chan)
+        bottleneck_conv = nn.Conv1d(audio_chan * in_chan, audio_chan * bn_chan, 1)
         self.bottleneck = nn.Sequential(layer_norm, bottleneck_conv)
         # Succession of Conv1DBlock with exponentially increasing dilation.
         self.TCN = nn.ModuleList()
@@ -170,9 +172,9 @@ class TDConvNet(nn.Module):
                     padding = (conv_kernel_size - 1) * 2 ** x
                 self.TCN.append(
                     Conv1DBlock(
-                        bn_chan,
-                        hid_chan,
-                        skip_chan,
+                        audio_chan * bn_chan,
+                        audio_chan * hid_chan,
+                        audio_chan * skip_chan,
                         conv_kernel_size,
                         padding=padding,
                         dilation=2 ** x,
@@ -181,7 +183,7 @@ class TDConvNet(nn.Module):
                     )
                 )
         mask_conv_inp = skip_chan if skip_chan else bn_chan
-        mask_conv = nn.Conv1d(mask_conv_inp, n_src * out_chan, 1)
+        mask_conv = nn.Conv1d(audio_chan * mask_conv_inp, n_src * audio_chan * out_chan, 1)
         self.mask_net = nn.Sequential(nn.PReLU(), mask_conv)
         # Get activation function.
         mask_nl_class = activations.get(mask_act)
@@ -200,8 +202,10 @@ class TDConvNet(nn.Module):
         Returns:
             :class:`torch.Tensor`: estimated mask of shape $(batch, nsrc, nfilters, nframes)$
         """
-        batch, _, n_frames = mixture_w.size()
-        output = self.bottleneck(mixture_w)
+        # batch, _, n_frames = mixture_w.size()
+        batch = mixture_w.shape[0]
+        n_frames = mixture_w.shape[-1]
+        output = self.bottleneck(mixture_w.view(batch, -1, n_frames))
         skip_connection = torch.tensor([0.0], device=output.device)
         for layer in self.TCN:
             # Common to w. skip and w.o skip architectures
@@ -215,7 +219,10 @@ class TDConvNet(nn.Module):
         # Use residual output when no skip connection
         mask_inp = skip_connection if self.skip_chan else output
         score = self.mask_net(mask_inp)
-        score = score.view(batch, self.n_src, self.out_chan, n_frames)
+        if self.audio_chan > 1:
+            score = score.view(batch, self.n_src, self.audio_chan, -1, n_frames)
+        else:
+            score = score.view(batch, self.n_src, self.out_chan, n_frames)
         est_mask = self.output_act(score)
         return est_mask
 
@@ -230,6 +237,7 @@ class TDConvNet(nn.Module):
             "n_blocks": self.n_blocks,
             "n_repeats": self.n_repeats,
             "n_src": self.n_src,
+            "audio_chan": self.audio_chan,
             "norm_type": self.norm_type,
             "mask_act": self.mask_act,
             "causal": self.causal,
